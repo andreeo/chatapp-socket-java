@@ -1,35 +1,37 @@
 package es.ubu.lsi.server;
 
-import es.ubu.lsi.common.ChatMessage;
-
 import java.io.*;
 import java.net.ServerSocket;
-import java.text.SimpleDateFormat;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Scanner;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class ChatServerImpl implements ChatServer {
 
     private Integer DEFAULT_PORT = 1500;
-    private Integer clientId;
-    private SimpleDateFormat sdf;
     private Boolean alive;
 
     private ServerSocket server;
-    private ArrayList<ServerThreadForClient> registers;
+    private final ArrayList<ServerThreadForClient> registers;
+    private final HashSet<String> blacklist;
 
     public ChatServerImpl(Integer port) {
+        this.setAlive(true);
         this.setDEFAULT_PORT(port);
+        registers = new ArrayList<>();
+        blacklist = new HashSet<>();
     }
-
-    public ChatServerImpl() {}
 
     @Override
     public void startup() {
         /* create socket server*/
         try {
             server = new ServerSocket(this.getDEFAULT_PORT());
-            while(alive) {
+            ExecutorService pool = Executors.newCachedThreadPool();
+            while(this.getAlive()) {
                 /* call the accept method, because its necessary
                 * return a client socket*/
                 Socket client = server.accept();
@@ -40,24 +42,39 @@ public class ChatServerImpl implements ChatServer {
                 /* save each thread register for push and correct
                 shutdown*/
                 registers.add(clientThread);
+                pool.execute(clientThread);
             }
         } catch (IOException e) {
-            // TODO: implement
+            shutdown();
         }
     }
 
     @Override
     public void shutdown() {
-        // TODO: implement
+        try {
+            this.setAlive(false);
+            if(!server.isClosed()) {
+                server.close();
+            }
+        } catch (IOException e) {
+            // nothing
+        }
+        for(ServerThreadForClient register: registers) {
+            register.shutdown();
+        }
     }
 
     @Override
-    public void broadcast(ChatMessage message) {
-        // TODO: implement
+    public void broadcast(String message) {
+        for(ServerThreadForClient register: registers) {
+            if(register != null) {
+                register.sendMsg(message);
+            }
+        }
     }
 
     @Override
-    public void remove(String id) {
+    public void remove(Integer id) {
         // TODO: implement
     }
 
@@ -69,21 +86,6 @@ public class ChatServerImpl implements ChatServer {
         this.DEFAULT_PORT = DEFAULT_PORT;
     }
 
-    public Integer getClientId() {
-        return clientId;
-    }
-
-    public void setClientId(Integer clientId) {
-        this.clientId = clientId;
-    }
-
-    public SimpleDateFormat getSdf() {
-        return sdf;
-    }
-
-    public void setSdf(SimpleDateFormat sdf) {
-        this.sdf = sdf;
-    }
 
     public Boolean getAlive() {
         return alive;
@@ -103,67 +105,109 @@ public class ChatServerImpl implements ChatServer {
             this.username = username;
         }
 
-        public Socket getClient() {
-            return client;
-        }
-
-        public void setClient(Socket client) {
-            this.client = client;
-        }
-
-        private long id;
 
         /* username for client */
         private String username;
         /* socket client */
-        private Socket client;
+        private final Socket client;
         /* buffer reader to get the stream from the socket */
         private BufferedReader inputStream;
         /* and print writer to write something to the client */
         private PrintWriter outputStream;
 
         public ServerThreadForClient(Socket client) {
-            this.setClient(client);
+
+            this.client =  client;
         }
 
         @Override
         public void run() {
             try {
-                inputStream =
-                        new BufferedReader(
+                outputStream = new PrintWriter(client.getOutputStream(), true);
+                inputStream = new BufferedReader(
                                 new InputStreamReader(client.getInputStream()));
-                outputStream =
-                        new PrintWriter(client.getOutputStream(), true);
                 /*send message to client insert nickname, id fill automatically
                 * with Thread id using getId*/
-                outputStream.printf("Welcome to ChatApp 1.0");
-                outputStream.printf("Please, insert your username:");
+                outputStream.println("Welcome to ChatApp 1.0");
                 /* set id and username */
-                this.id = Thread.currentThread().getId();
-                this.setUsername(inputStream.readLine());
+                this.setUsername(new Scanner(inputStream.readLine()).next());
+                long id = Thread.currentThread().getId();
+                broadcast(this.getUsername()+" joined the chat");
+
                 /* development proposes */
                 System.out.printf(
-                        "[[CONNECTION]] USER: %s , STATUS: CONNECTED", this.getUsername());
+                        "[[CONNECTION]] USER: %s , " +
+                                "STATUS: CONNECTED\n", this.getUsername());
 
                 String message;
                 while((message = inputStream.readLine()) != null) {
-                    if(message.startsWith("ban ")) {
-                        // TODO: implement
-                    } else if(message.startsWith("unban ")) {
-                        // TODO: implement
+                    if(message.startsWith("ban ") || message.startsWith("unban ")) {
+                        String[] words = message.split(" ",2);
+                        if(words.length == 2) {
+                            String otherUser = words[1];
+                            if(words[0].equals("ban")) {
+                                if(!blacklist.contains(otherUser)) {
+                                    blacklist.add(otherUser);
+                                    broadcast(otherUser+" banned by "+username);
+                                    /* development proposes */
+                                    System.out.printf("%s banned by %s", otherUser, username);
+                                    System.out.println(" ");
+                                } else {
+                                    System.out.println("the user " + username + " has already been banned ");
+                                }
+                            } else {
+                                if(blacklist.contains(otherUser)) {
+                                    blacklist.remove(otherUser);
+                                    broadcast(otherUser+" unbanned by "+username);
+                                    /* development proposes */
+                                    System.out.printf("%s unbanned by %s", otherUser, username);
+                                    System.out.println(" ");
+                                } else {
+                                    System.out.println("the user " + username + " isn't banned ");
+                                }
+                            }
+                        } else {
+                            outputStream.println("Required a username");
+                        }
+                    } else if(message.equals("logout"))  {
+                        broadcast(username+" left chat");
+                        /* development proposes */
+                        System.out.printf(
+                                "[[CONNECTION]] USER: %s , STATUS: DISCONNECTED\n", this.getUsername());
+                        shutdown();
                     } else {
-                        // TODO: implement, here we can broadcast the messages
+                        if(!blacklist.contains(this.getUsername())) {
+                            broadcast(this.getUsername()+": "+message);
+                        } else {
+                            System.out.println("You are banned");
+                        }
                     }
                 }
 
+            } catch (Exception e) {
+                shutdown();
+            }
+        }
+
+        public void sendMsg(String message) {
+            outputStream.println(message);
+        }
+
+        public void shutdown() {
+            try {
+                inputStream.close();
+                outputStream.close();
+                if(!this.client.isClosed()) {
+                    this.client.close();
+                }
             } catch (IOException e) {
-                // TODO: implement
+                // nothing
             }
         }
     }
 
     public static void main(String[] args) {
-        ChatServerImpl server = new ChatServerImpl(9000);
+        ChatServerImpl server = new ChatServerImpl(9999);
         server.startup();
     }
 }

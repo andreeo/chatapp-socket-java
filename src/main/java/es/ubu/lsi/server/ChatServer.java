@@ -1,5 +1,5 @@
 package es.ubu.lsi.server;
-import es.ubu.lsi.common.ChatMessage;
+
 public interface ChatServer {
 
     /**
@@ -18,12 +18,12 @@ public interface ChatServer {
      *
      * @param message message
      */
-    public void broadcast(ChatMessage message);
+    public void broadcast(String message);
 
     /**
      * Remove client from the server
      *
      * @param id
      */
-    public void remove(String id);
+    public void remove(Integer id);
 }
